@@ -8,6 +8,7 @@ Pi extension that syncs pi session files (`~/.pi/agent/sessions`) to Azure Blob 
 |---|---|
 | `session_start` | pull: download remote blobs missing locally or strictly newer (fire-and-forget, never blocks startup) |
 | `session_shutdown` | push: upload local files missing remotely or strictly newer |
+| `agent_settled` *(opt-in)* | push after the agent finishes and no continuation is pending — i.e. when you stop typing |
 | `/sync` | pull + push on demand |
 
 Conflicts resolve last-write-wins by mtime. Blob `lastModified` has second granularity, so differences within 1 s are treated as equal (prevents ping-pong transfers). Deletions are not propagated.
@@ -29,6 +30,7 @@ All via env vars; defaults point at local Azurite:
 | `CLOUD_SESSIONS_KEY` | (well-known Azurite key) |
 | `CLOUD_SESSIONS_CONTAINER` | `pi-sessions` |
 | `PI_SESSIONS_DIR` | `~/.pi/agent/sessions` |
+| `CLOUD_SESSIONS_PUSH_ON_SETTLE` | off (`1`/`true`/`yes` enables) |
 
 Production example:
 

@@ -34,13 +34,14 @@ function mockPi() {
   };
 }
 
-function makeDeps(sessionsDir: string, store: BlobStore) {
+function makeDeps(sessionsDir: string, store: BlobStore, pushOnSettle = false) {
   const config: CloudSessionsConfig = {
     endpoint: "http://127.0.0.1:10000/devstoreaccount1",
     accountName: "devstoreaccount1",
     accountKey: "test-key",
     containerName: "pi-sessions",
     localSessionsDir: sessionsDir,
+    pushOnSettle,
   };
 
   return { loadConfig: () => config, createStore: () => store };
@@ -106,5 +107,29 @@ describe("extension glue", () => {
 
     await expect(handlers.get("session_shutdown")!({}, { ui: { notify } })).resolves.toBeUndefined();
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("failed"), "error");
+  });
+
+  it("does not register agent_settled when push-on-settle is disabled", () => {
+    const { handlers, pi } = mockPi();
+
+    createExtension(makeDeps(makeTempDir("sessions-"), new InMemoryStore()))(pi);
+
+    expect(handlers.has("agent_settled")).toBe(false);
+  });
+
+  it("agent_settled pushes local sessions when push-on-settle is enabled", async () => {
+    const sessionsDir = makeTempDir("sessions-");
+    mkdirSync(join(sessionsDir, "--cwd--"), { recursive: true });
+    writeFileSync(join(sessionsDir, "--cwd--/a.jsonl"), "alpha\n");
+    const store = new InMemoryStore();
+    const { handlers, pi } = mockPi();
+
+    createExtension(makeDeps(sessionsDir, store, true))(pi);
+
+    await handlers.get("agent_settled")!({}, { ui: {} });
+    // fire-and-forget in production, so wait for the upload
+    await vi.waitFor(() => {
+      expect(store.getBlobData("--cwd--/a.jsonl")?.toString()).toBe("alpha\n");
+    });
   });
 });

@@ -39,6 +39,8 @@ export function createExtension(deps: ExtensionDeps = { loadConfig, createStore:
   };
 
   return function cloudSessionsExtension(pi: ExtensionAPI): void {
+    const config = deps.loadConfig();
+
     pi.on("session_start", async (_event, ctx) => {
       void runSync("pull", ctx);
     });
@@ -46,6 +48,12 @@ export function createExtension(deps: ExtensionDeps = { loadConfig, createStore:
     pi.on("session_shutdown", async (_event, ctx) => {
       await runSync("push", ctx);
     });
+
+    if (config.pushOnSettle) {
+      pi.on("agent_settled", async (_event, ctx) => {
+        void runSync("push", ctx);
+      });
+    }
 
     pi.registerCommand("sync", {
       description: "Sync pi sessions with cloud blob storage",
