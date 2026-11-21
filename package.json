@@ -1,0 +1,19 @@
+{
+  "name": "cloud-sessions",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Sync pi session files to Azure Blob Storage (Azurite-compatible)",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@azure/storage-blob": "^12.27.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
