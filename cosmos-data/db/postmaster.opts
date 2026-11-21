@@ -1,1 +1,0 @@
-/usr/bin/postgres "-D" "/data/db" "-p" "9712" "-i" "-c" "max_slot_wal_keep_size=256MB"
