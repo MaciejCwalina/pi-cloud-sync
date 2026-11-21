@@ -2,13 +2,28 @@ import { describe, expect, it } from "vitest";
 import { loadConfig } from "./config.js";
 
 describe("loadConfig", () => {
-  it("defaults to the Azurite dev endpoint", () => {
+  it("defaults to the blob driver and Azurite dev endpoint", () => {
     const config = loadConfig({});
 
+    expect(config.driver).toBe("blob");
     expect(config.endpoint).toBe("http://127.0.0.1:10000/devstoreaccount1");
     expect(config.accountName).toBe("devstoreaccount1");
     expect(config.containerName).toBe("pi-sessions");
     expect(config.pushOnSettle).toBe(false);
+  });
+
+  it("defaults the cosmos driver to the emulator endpoint", () => {
+    const config = loadConfig({});
+
+    expect(config.cosmosEndpoint).toBe("http://localhost:8081");
+    expect(config.cosmosDatabase).toBe("pi-cloud-sync");
+    expect(config.cosmosContainer).toBe("conversations");
+  });
+
+  it("selects the cosmos driver from env", () => {
+    expect(loadConfig({ CLOUD_SESSIONS_DRIVER: "cosmos" }).driver).toBe("cosmos");
+    expect(loadConfig({ CLOUD_SESSIONS_DRIVER: "blob" }).driver).toBe("blob");
+    expect(loadConfig({ CLOUD_SESSIONS_DRIVER: "something-else" }).driver).toBe("blob");
   });
 
   it("honours environment overrides", () => {

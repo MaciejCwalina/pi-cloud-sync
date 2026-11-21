@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContextLike } from "@earendil-works/pi-coding-agent";
 import { createExtension } from "./index.js";
-import { InMemoryStore, type BlobStore } from "./store.js";
+import { InMemoryDriver, type ConversationDriver } from "./drivers.js";
 import type { CloudSessionsConfig } from "./config.js";
 import { makeTempDir } from "./test-utils.js";
 
@@ -34,53 +34,58 @@ function mockPi() {
   };
 }
 
-function makeDeps(sessionsDir: string, store: BlobStore, pushOnSettle = false) {
+function makeDeps(sessionsDir: string, driver: ConversationDriver, pushOnSettle = false) {
   const config: CloudSessionsConfig = {
+    driver: "cosmos",
     endpoint: "http://127.0.0.1:10000/devstoreaccount1",
     accountName: "devstoreaccount1",
     accountKey: "test-key",
     containerName: "pi-sessions",
+    cosmosEndpoint: "http://localhost:8081",
+    cosmosKey: "test-key",
+    cosmosDatabase: "pi-cloud-sync",
+    cosmosContainer: "conversations",
     localSessionsDir: sessionsDir,
     pushOnSettle,
   };
 
-  return { loadConfig: () => config, createStore: () => store };
+  return { loadConfig: () => config, createDriver: () => driver };
 }
 
 describe("extension glue", () => {
   it("registers session hooks and the /sync command", () => {
     const { handlers, commands, pi } = mockPi();
 
-    createExtension(makeDeps(makeTempDir("ext-"), new InMemoryStore()))(pi);
+    createExtension(makeDeps(makeTempDir("ext-"), new InMemoryDriver()))(pi);
 
     expect(handlers.has("session_start")).toBe(true);
     expect(handlers.has("session_shutdown")).toBe(true);
     expect(commands.has("sync")).toBe(true);
   });
 
-  it("session_shutdown pushes local sessions to the store", async () => {
+  it("session_shutdown pushes local sessions to the driver", async () => {
     const sessionsDir = makeTempDir("sessions-");
     mkdirSync(join(sessionsDir, "--cwd--"), { recursive: true });
     writeFileSync(join(sessionsDir, "--cwd--/a.jsonl"), "alpha\n");
-    const store = new InMemoryStore();
+    const driver = new InMemoryDriver();
     const { handlers, pi } = mockPi();
 
-    createExtension(makeDeps(sessionsDir, store))(pi);
+    createExtension(makeDeps(sessionsDir, driver))(pi);
     const notify = vi.fn();
 
     await handlers.get("session_shutdown")!({}, { ui: { notify } });
 
-    expect(store.getBlobData("--cwd--/a.jsonl")?.toString()).toBe("alpha\n");
+    expect(driver.getLines("--cwd--/a.jsonl")).toEqual(["alpha"]);
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("pushed 1"), "info");
   });
 
   it("session_start pulls remote sessions locally", async () => {
     const sessionsDir = makeTempDir("sessions-");
-    const store = new InMemoryStore();
-    store.seed("--cwd--/a.jsonl", Buffer.from("alpha\n"), new Date());
+    const driver = new InMemoryDriver();
+    driver.seed("--cwd--/a.jsonl", ["alpha"]);
     const { handlers, pi } = mockPi();
 
-    createExtension(makeDeps(sessionsDir, store))(pi);
+    createExtension(makeDeps(sessionsDir, driver))(pi);
 
     await handlers.get("session_start")!({}, { ui: {} });
     // session_start is fire-and-forget in production, so wait for the file
@@ -91,18 +96,19 @@ describe("extension glue", () => {
     expect(readFileSync(join(sessionsDir, "--cwd--/a.jsonl"), "utf8")).toBe("alpha\n");
   });
 
-  it("swallows store failures instead of throwing", async () => {
-    const failingStore: BlobStore = {
-      ensureContainer: async () => {
+  it("swallows driver failures instead of throwing", async () => {
+    const failingDriver: ConversationDriver = {
+      kind: "failing",
+      ensureReady: async () => {
         throw new Error("boom");
       },
-      listBlobs: async () => [],
-      upload: async () => {},
-      download: async () => {},
+      listConversations: async () => [],
+      pull: async () => false,
+      push: async () => false,
     };
     const { handlers, pi } = mockPi();
 
-    createExtension(makeDeps(makeTempDir("sessions-"), failingStore))(pi);
+    createExtension(makeDeps(makeTempDir("sessions-"), failingDriver))(pi);
     const notify = vi.fn();
 
     await expect(handlers.get("session_shutdown")!({}, { ui: { notify } })).resolves.toBeUndefined();
@@ -112,7 +118,7 @@ describe("extension glue", () => {
   it("does not register agent_settled when push-on-settle is disabled", () => {
     const { handlers, pi } = mockPi();
 
-    createExtension(makeDeps(makeTempDir("sessions-"), new InMemoryStore()))(pi);
+    createExtension(makeDeps(makeTempDir("sessions-"), new InMemoryDriver()))(pi);
 
     expect(handlers.has("agent_settled")).toBe(false);
   });
@@ -121,15 +127,15 @@ describe("extension glue", () => {
     const sessionsDir = makeTempDir("sessions-");
     mkdirSync(join(sessionsDir, "--cwd--"), { recursive: true });
     writeFileSync(join(sessionsDir, "--cwd--/a.jsonl"), "alpha\n");
-    const store = new InMemoryStore();
+    const driver = new InMemoryDriver();
     const { handlers, pi } = mockPi();
 
-    createExtension(makeDeps(sessionsDir, store, true))(pi);
+    createExtension(makeDeps(sessionsDir, driver, true))(pi);
 
     await handlers.get("agent_settled")!({}, { ui: {} });
     // fire-and-forget in production, so wait for the upload
     await vi.waitFor(() => {
-      expect(store.getBlobData("--cwd--/a.jsonl")?.toString()).toBe("alpha\n");
+      expect(driver.getLines("--cwd--/a.jsonl")).toEqual(["alpha"]);
     });
   });
 });

@@ -1,86 +1,78 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { mkdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { InMemoryStore } from "./store.js";
+import { InMemoryDriver } from "./drivers.js";
 import { pull, push } from "./sync.js";
 import { makeTempDir } from "./test-utils.js";
 
 describe("sync", () => {
   let localRoot: string;
-  let store: InMemoryStore;
+  let driver: InMemoryDriver;
 
   beforeEach(() => {
     localRoot = makeTempDir("sync-");
-    store = new InMemoryStore();
+    driver = new InMemoryDriver();
   });
 
   describe("pull", () => {
-    it("downloads missing remote files, creating directories", async () => {
-      store.seed("--cwd--/session-a.jsonl", Buffer.from("line1\n"), new Date("2026-01-01T00:00:00Z"));
+    it("downloads missing remote conversations, creating directories", async () => {
+      driver.seed("--cwd--/session-a.jsonl", ["line1", "line2"]);
 
-      const result = await pull(store, localRoot);
+      const result = await pull(driver, localRoot);
 
       expect(result.transferred).toEqual(["--cwd--/session-a.jsonl"]);
-      expect(readFileSync(join(localRoot, "--cwd--/session-a.jsonl"), "utf8")).toBe("line1\n");
+      expect(readFileSync(join(localRoot, "--cwd--/session-a.jsonl"), "utf8")).toBe("line1\nline2\n");
     });
 
-    it("skips files that are up to date", async () => {
-      const sameTime = new Date("2026-01-01T00:00:00Z");
-      store.seed("session-a.jsonl", Buffer.from("old\n"), sameTime);
+    it("skips conversations that are up to date", async () => {
+      driver.seed("session-a.jsonl", ["old"]);
       writeFileSync(join(localRoot, "session-a.jsonl"), "old\n");
-      utimesSync(join(localRoot, "session-a.jsonl"), sameTime, sameTime);
 
-      const result = await pull(store, localRoot);
+      const result = await pull(driver, localRoot);
 
       expect(result.transferred).toEqual([]);
       expect(result.upToDate).toBe(1);
     });
 
-    it("re-downloads when the remote copy is strictly newer", async () => {
-      const localTime = new Date("2026-01-01T00:00:00Z");
+    it("writes the local copy when the remote conversation is ahead", async () => {
       writeFileSync(join(localRoot, "session-a.jsonl"), "old\n");
-      utimesSync(join(localRoot, "session-a.jsonl"), localTime, localTime);
-      store.seed("session-a.jsonl", Buffer.from("new\n"), new Date("2026-01-01T00:00:05Z"));
+      driver.seed("session-a.jsonl", ["old", "newer"]);
 
-      const result = await pull(store, localRoot);
+      const result = await pull(driver, localRoot);
 
       expect(result.transferred).toEqual(["session-a.jsonl"]);
-      expect(readFileSync(join(localRoot, "session-a.jsonl"), "utf8")).toBe("new\n");
+      expect(readFileSync(join(localRoot, "session-a.jsonl"), "utf8")).toBe("old\nnewer\n");
     });
   });
 
   describe("push", () => {
-    it("uploads local files missing remotely", async () => {
-      writeFileSync(join(localRoot, "session-a.jsonl"), "hello\n");
+    it("creates remote conversations for local files", async () => {
+      writeFileSync(join(localRoot, "session-a.jsonl"), "hello\nworld\n");
 
-      const result = await push(store, localRoot);
+      const result = await push(driver, localRoot);
 
       expect(result.transferred).toEqual(["session-a.jsonl"]);
-      expect(store.getBlobData("session-a.jsonl")?.toString()).toBe("hello\n");
+      expect(driver.getLines("session-a.jsonl")).toEqual(["hello", "world"]);
     });
 
     it("skips files whose remote copy is up to date", async () => {
-      const sameTime = new Date("2026-01-01T00:00:00Z");
       writeFileSync(join(localRoot, "session-a.jsonl"), "same\n");
-      utimesSync(join(localRoot, "session-a.jsonl"), sameTime, sameTime);
-      store.seed("session-a.jsonl", Buffer.from("same\n"), sameTime);
+      driver.seed("session-a.jsonl", ["same"]);
 
-      const result = await push(store, localRoot);
+      const result = await push(driver, localRoot);
 
       expect(result.transferred).toEqual([]);
       expect(result.upToDate).toBe(1);
     });
 
-    it("uploads when the local copy is strictly newer", async () => {
-      const localTime = new Date("2026-01-01T00:00:05Z");
-      writeFileSync(join(localRoot, "session-a.jsonl"), "newer\n");
-      utimesSync(join(localRoot, "session-a.jsonl"), localTime, localTime);
-      store.seed("session-a.jsonl", Buffer.from("older\n"), new Date("2026-01-01T00:00:00Z"));
+    it("appends only the new tail when the local copy is ahead", async () => {
+      writeFileSync(join(localRoot, "session-a.jsonl"), "old\nnewer\n");
+      driver.seed("session-a.jsonl", ["old"]);
 
-      const result = await push(store, localRoot);
+      const result = await push(driver, localRoot);
 
       expect(result.transferred).toEqual(["session-a.jsonl"]);
-      expect(store.getBlobData("session-a.jsonl")?.toString()).toBe("newer\n");
+      expect(driver.getLines("session-a.jsonl")).toEqual(["old", "newer"]);
     });
   });
 
@@ -88,12 +80,12 @@ describe("sync", () => {
     const sourceRoot = makeTempDir("source-");
     const targetRoot = makeTempDir("target-");
     mkdirSync(join(sourceRoot, "--cwd--"), { recursive: true });
-    writeFileSync(join(sourceRoot, "--cwd--/a.jsonl"), "alpha\n");
+    writeFileSync(join(sourceRoot, "--cwd--/a.jsonl"), "alpha\nbeta\n");
 
-    await push(store, sourceRoot);
-    const result = await pull(store, targetRoot);
+    await push(driver, sourceRoot);
+    const result = await pull(driver, targetRoot);
 
     expect(result.transferred).toHaveLength(1);
-    expect(readFileSync(join(targetRoot, "--cwd--/a.jsonl"), "utf8")).toBe("alpha\n");
+    expect(readFileSync(join(targetRoot, "--cwd--/a.jsonl"), "utf8")).toBe("alpha\nbeta\n");
   });
 });

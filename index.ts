@@ -1,18 +1,24 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadConfig, type CloudSessionsConfig } from "./config.js";
-import { createAzureStore, type BlobStore } from "./store.js";
+import { createBlobDriver } from "./blob-driver.js";
+import { createCosmosDriver } from "./cosmos-driver.js";
+import type { ConversationDriver } from "./drivers.js";
 import { pull, push } from "./sync.js";
 
 export interface ExtensionDeps {
   loadConfig: () => CloudSessionsConfig;
-  createStore: (config: CloudSessionsConfig) => BlobStore;
+  createDriver: (config: CloudSessionsConfig) => ConversationDriver;
+}
+
+function createDefaultDriver(config: CloudSessionsConfig): ConversationDriver {
+  return config.driver === "cosmos" ? createCosmosDriver(config) : createBlobDriver(config);
 }
 
 interface NotifyContext {
   ui?: { notify?: (message: string, level?: "info" | "warning" | "error") => void };
 }
 
-export function createExtension(deps: ExtensionDeps = { loadConfig, createStore: createAzureStore }) {
+export function createExtension(deps: ExtensionDeps = { loadConfig, createDriver: createDefaultDriver }) {
   const announce = (ctx: unknown, message: string, level: "info" | "error" = "info"): void => {
     const ui = (ctx as NotifyContext | undefined)?.ui;
     if (ui?.notify) {
@@ -23,18 +29,21 @@ export function createExtension(deps: ExtensionDeps = { loadConfig, createStore:
   const runSync = async (direction: "pull" | "push", ctx: unknown): Promise<void> => {
     try {
       const config = deps.loadConfig();
-      const store = deps.createStore(config);
-      await store.ensureContainer();
+      const driver = deps.createDriver(config);
+      await driver.ensureReady();
 
       const result =
         direction === "pull"
-          ? await pull(store, config.localSessionsDir)
-          : await push(store, config.localSessionsDir);
-      announce(ctx, `cloud-sessions: ${direction}ed ${result.transferred.length} file(s), ${result.upToDate} up to date`);
+          ? await pull(driver, config.localSessionsDir)
+          : await push(driver, config.localSessionsDir);
+      announce(
+        ctx,
+        `pi-cloud-sync [${driver.kind}]: ${direction}ed ${result.transferred.length} file(s), ${result.upToDate} up to date`,
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`cloud-sessions: ${direction} failed: ${message}`);
-      announce(ctx, `cloud-sessions: ${direction} failed: ${message}`, "error");
+      console.error(`pi-cloud-sync: ${direction} failed: ${message}`);
+      announce(ctx, `pi-cloud-sync: ${direction} failed: ${message}`, "error");
     }
   };
 
@@ -56,7 +65,7 @@ export function createExtension(deps: ExtensionDeps = { loadConfig, createStore:
     }
 
     pi.registerCommand("sync", {
-      description: "Sync pi sessions with cloud blob storage",
+      description: "Sync pi sessions with cloud storage",
       handler: async (_name, ctx) => {
         await runSync("pull", ctx);
         await runSync("push", ctx);

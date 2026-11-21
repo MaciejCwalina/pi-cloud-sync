@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@azure/cosmos": "^4.7.0",
     "@azure/storage-blob": "^12.27.0"
   },
   "devDependencies": {

@@ -1,20 +1,14 @@
-import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
-import type { BlobStore } from "./store.js";
-
-/**
- * Blob lastModified timestamps have second granularity, so treat
- * differences within this window as "equal" to avoid ping-pong transfers.
- */
-export const MTIME_EPSILON_MS = 1_000;
+import { existsSync, readdirSync } from "node:fs";
+import { join, relative } from "node:path";
+import type { ConversationDriver } from "./drivers.js";
 
 export interface SyncResult {
   transferred: string[];
   upToDate: number;
 }
 
-function collectLocalFiles(rootDir: string): Map<string, Date> {
-  const localFiles = new Map<string, Date>();
+function collectLocalFiles(rootDir: string): string[] {
+  const localFiles: string[] = [];
 
   const walk = (dir: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -22,7 +16,7 @@ function collectLocalFiles(rootDir: string): Map<string, Date> {
       if (entry.isDirectory()) {
         walk(entryPath);
       } else if (entry.isFile()) {
-        localFiles.set(relative(rootDir, entryPath), statSync(entryPath).mtime);
+        localFiles.push(relative(rootDir, entryPath));
       }
     }
   };
@@ -34,45 +28,37 @@ function collectLocalFiles(rootDir: string): Map<string, Date> {
   return localFiles;
 }
 
-/** Download remote blobs that are missing locally or strictly newer. */
-export async function pull(store: BlobStore, rootDir: string): Promise<SyncResult> {
-  const remoteBlobs = await store.listBlobs();
+/** Download remote conversations that are ahead of their local copies. */
+export async function pull(driver: ConversationDriver, rootDir: string): Promise<SyncResult> {
+  const refs = await driver.listConversations();
   const transferred: string[] = [];
   let upToDate = 0;
 
-  for (const remoteBlob of remoteBlobs) {
-    const localPath = join(rootDir, remoteBlob.path);
-    const localMtime = existsSync(localPath) ? statSync(localPath).mtime : null;
-    if (localMtime !== null && remoteBlob.lastModified.getTime() - localMtime.getTime() <= MTIME_EPSILON_MS) {
+  for (const ref of refs) {
+    if (await driver.pull(ref, join(rootDir, ref.id))) {
+      transferred.push(ref.id);
+    } else {
       upToDate += 1;
-      continue;
     }
-
-    mkdirSync(dirname(localPath), { recursive: true });
-    await store.download(remoteBlob.path, localPath);
-    transferred.push(remoteBlob.path);
   }
 
   return { transferred, upToDate };
 }
 
-/** Upload local files that are missing remotely or strictly newer. */
-export async function push(store: BlobStore, rootDir: string): Promise<SyncResult> {
-  const remoteBlobs = await store.listBlobs();
-  const remoteMtimes = new Map(remoteBlobs.map((remoteBlob) => [remoteBlob.path, remoteBlob.lastModified]));
-  const localFiles = collectLocalFiles(rootDir);
+/** Upload local files that are ahead of their remote copies. */
+export async function push(driver: ConversationDriver, rootDir: string): Promise<SyncResult> {
+  const refs = await driver.listConversations();
+  const refById = new Map(refs.map((ref) => [ref.id, ref]));
   const transferred: string[] = [];
   let upToDate = 0;
 
-  for (const [relativePath, localMtime] of localFiles) {
-    const remoteMtime = remoteMtimes.get(relativePath);
-    if (remoteMtime !== undefined && localMtime.getTime() - remoteMtime.getTime() <= MTIME_EPSILON_MS) {
+  for (const relativePath of collectLocalFiles(rootDir)) {
+    const ref = refById.get(relativePath) ?? null;
+    if (await driver.push(relativePath, ref, join(rootDir, relativePath))) {
+      transferred.push(relativePath);
+    } else {
       upToDate += 1;
-      continue;
     }
-
-    await store.upload(join(rootDir, relativePath), relativePath);
-    transferred.push(relativePath);
   }
 
   return { transferred, upToDate };
